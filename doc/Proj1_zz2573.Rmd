@@ -1,0 +1,207 @@
+---
+title: "GR5243 Project1"
+author: "Zihan Zhou (zz2573)"
+date: "9/16/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load in required libraries
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(knitr)
+library(wordcloud2)
+library(tm)
+library(tidytext)
+library(syuzhet)
+library(sentimentr)
+library(stringr)
+library(factoextra)
+```
+
+# Load in data
+
+The data is produced by the [sample code](../lib/Text_Processing.Rmd) offered by the instruction team.
+
+```{r}
+load("../output/processed_lyrics.RData")
+```
+
+# Overview of the data
+
+```{r}
+nrow(dt_lyrics)
+```
+
+```{r echo=FALSE}
+genre_counts <- count(dt_lyrics, genre)
+p <- ggplot(data = genre_counts, 
+            aes(x = reorder(genre, -n), y = n)) +
+  geom_bar(stat = "identity", fill = "orange") +
+  ggtitle("Number of Songs") +
+  xlab("Genre") +
+  ylab("Count")
+p
+```
+
+There are 125704 songs in the dataset, nearly half of which are of rock genre. The number of songs of different genres are displayed in a descending order in the barplot.
+
+We can take a look at the length of all lyrics within each genre (by dividing lyrics into sentences and count the number of words):
+
+```{r}
+get_sent <- function(text){
+  sentences <- unlist(strsplit(text, 
+                               split = "(\n|(\\([A-Za-z]+\\))|\\[[A-Za-z]+\\])+")) 
+  # Split by \n and parentheses & brackets
+  sentences <- syuzhet::get_sentences(sentences) 
+  # Split by regular punctuations
+  sentences <- sentences[sentences != ""]
+  # Remove empty string
+  return(sentences)
+}
+
+word_count=function(str){
+  return(sum(str_count(str, '\\w+')))
+  # Return the length of a sentence
+}
+
+text_len <- function(text){
+  return(sum(word_count(get_sent(text))))
+}
+
+###### you can load in data saved and comment out this sentence
+load("../output/modified_lyrics.RData")
+#dt_lyrics$len <- unlist(lapply(dt_lyrics$lyrics, text_len))
+
+```
+
+```{r}
+len_plot <- ggplot(data = dt_lyrics) +
+  geom_point(aes(x = len, y = genre, col = genre)) +
+  labs(x = "Length of Lyrics", y = "Genre")
+
+len_plot
+```
+
+It seems that rock and hip-hop music have relatively long lyrics.
+
+# Word Frequency -- WordCloud
+
+Then we use the *wordcloud2* package to produce wordclouds. Here are some examples (Top 50 most frequent words for Rock and Metal music):
+
+(Code partially sourced from [ShinyApp](../lib/Lyrics_ShinyApp.Rmd))
+
+```{r eval=FALSE, include=FALSE}
+lyrics_list <- c("Folk", "R&B", "Electronic", "Jazz", "Indie", "Country", "Rock", "Metal", "Pop", "Hip-Hop", "Other")
+time_list <- c("1970s", "1980s", "1990s", "2000s", "2010s")
+corpus <- VCorpus(VectorSource(dt_lyrics$stemmedwords))
+word_tibble <- tidy(corpus) %>%
+  select(text) %>%
+  mutate(id = row_number()) %>%
+  unnest_tokens(word, text)
+```
+
+```{r eval=FALSE, include=FALSE}
+Pop_wordcloud <- count(filter(word_tibble, id %in% which(dt_lyrics$genre == "Pop")), word, sort = TRUE) %>%
+  slice(1:100) %>%
+  wordcloud2(size = 1.0, rotateRatio = 0.2)
+
+Metal_wordcloud <- count(filter(word_tibble, id %in% which(dt_lyrics$genre == "Metal")), word, sort = TRUE) %>%
+  slice(1:100) %>%
+  wordcloud2(size=0.4, rotateRatio=0.2)
+```
+
+```{r echo=FALSE}
+include_graphics(c("../figs/Pop_wordcloud.png", "../figs/Metal_wordcloud.png"))
+```
+
+As we can see, there are differences between different genres in terms of words used in lyrics. For example, in pop music, we notice a lot of "positive" words such as *love, baby* and almost no "negative" words. But in metal music words like *die, death, dark* appear more often.
+
+This phenomenon leads us to sentiment analysis of the dataset.
+
+# Sentiment Analysis
+
+Still we need to divide lyrics into sentences. Note that in our raw dataset sentences could be divided by *\n* besides regular punctuations. Then we use the **emotion()** function from **sentimentr** package to measure the scores of eight different kinds of emotions for each sentence, which is a length-8 vector, and normalize it.
+
+```{r warning=FALSE}
+get_sent <- function(text){
+  sentences <- unlist(strsplit(text, 
+                               split = "(\n|(\\([A-Za-z]+\\))|\\[[A-Za-z]+\\])+")) 
+  # Split by \n and parentheses & brackets
+  sentences <- syuzhet::get_sentences(sentences) 
+  # Split by regular punctuations
+  sentences <- sentences[sentences != ""]
+  # Remove empty string
+  return(sentences)
+}
+
+emo_type = c("anticipation", "joy", "surprise", "trust",
+                            "anger", "disgust", "fear", "sadness")
+
+get_emotion <- function(text, drop.unused.emotions = F, un.as.negation = T){
+  sentences <- get_sent(text)
+  stopifnot(length(sentences) > 0)
+  emotions <- emotion(sentences, drop.unused.emotions = drop.unused.emotions,
+                      un.as.negation = un.as.negation)
+  emotions <- emotions[emotions$emotion_count != 0 & emotions$emotion >= 0.01, ]
+  # Only select sentences including emotion words & ignore weak detections
+  
+  result <- tapply(emotions$emotion, emotions$emotion_type, sum)
+  result <- result[emo_type]
+  return(result)
+  # result is a length-8 vector 
+}
+
+#Sys.time()
+#result <- tapply(dt_lyrics$lyrics, dt_lyrics$genre, get_emotion)
+#result <- lapply(result, function(x) x / sum(x)) # Normalize
+#Sys.time() # Running time: around 20mins
+
+###### you can load in data saved and comment out previous sentences
+load("../output/sentiment_result.RData")
+```
+
+```{r}
+# Visualization
+
+sentiment_data <- matrix(0, nrow = length(result) * length(emo_type), ncol = 3)
+for(i in 1:length(result)){
+  sentiment_data[(8*i-7):(8*i), 1] <- result[[i]]
+  sentiment_data[(8*i-7):(8*i), 2] <- emo_type
+  sentiment_data[(8*i-7):(8*i), 3] <- rep(names(result)[i], 8)
+}
+sentiment_data <- data.frame(sentiment_data)
+colnames(sentiment_data) <- c("Score", "Sentiment", "Genre")
+sentiment_data$Score <- as.numeric(as.character(sentiment_data$Score)) # unfactorize
+sentiment_data$Sentiment <- factor(sentiment_data$Sentiment, levels = factor(emo_type))
+
+sentiment_plot <- ggplot(data = sentiment_data, 
+                         aes(x = Sentiment, y = Score, col = Genre, group = Genre)) +
+  geom_point() +
+  geom_path()
+sentiment_plot
+```
+
+The first four and the last four sentiments represent positive and negative emotions respectively. We can see from the plot that there are several genres are of the same pattern, that they mostly convey positive emotions and very few negative ones. On the contrary, metal music and hip-hop music use relatively more negative words. This exploration is seemingly consistent with my understanding of these genres.
+
+# Clustering Analysis
+
+As we have just discussed, there seems to be two kinds of music: positive ones and negative ones. We can do clustering analysis to validate this conjecture.
+
+```{r}
+cluster_data <- matrix(0, nrow = 12, ncol = 8)
+cluster_data <- data.frame(cluster_data)
+for(i in 1:12) cluster_data[i, ] <- result[[i]]
+colnames(cluster_data) <- emo_type
+rownames(cluster_data) <- names(result)
+
+cluster_2 <- kmeans(cluster_data, centers = 2, iter.max = 20)
+fviz_cluster(cluster_2, data = cluster_data)
+```
+
+Using basic kmeans algorithm ($k=2$), we can see that hip-hop and metal are clustered together while another cluster consists of all the rest genres. 

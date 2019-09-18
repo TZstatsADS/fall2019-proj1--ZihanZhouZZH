@@ -200,7 +200,7 @@ server <- function(input, output) {
 ### Run the R Shiny app
 
 ```{r shiny app, warning=FALSE, message=FALSE}
-shinyApp(ui, server)
+#shinyApp(ui, server)
 ```
 
 
